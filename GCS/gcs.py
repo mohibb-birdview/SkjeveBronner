@@ -7,14 +7,23 @@ import time
 from tkinter import TclError as TclError
 import serial.tools.list_ports
 
+import pprint
 import matplotlib
 import matplotlib.path as mplpath
 import matplotlib.pyplot as plt
 import numpy as np
-# import wellhead_sim as wh
+
+from Functions import functions
+from GCS import wellhead_sim as wh
+
+
+DEBUG_MODE = True
 
 SECONDS_TO_SHOW = 30
 MAX_ANGLE = 3
+
+# TODO: Fix x+ and z+
+# TODO: Let streaming go to log file, and then make separate process for plotting
 
 
 def generate_polygon(ctr_x, ctr_y, ave_radius, irregularity, spikeyness, num_verts):
@@ -85,7 +94,7 @@ def create_plots():
 
     """ Create subplots and axis objects """
     timeline_x_ax = plt.subplot(2, 2, 2)
-    timeline_x_ax.set_xlim([0, SECONDS_TO_SHOW])
+    timeline_x_ax.set_xlim([-SECONDS_TO_SHOW, 0])
     timeline_x_ax.set_ylim([-5, 5])
     timeline_x_ax.grid(True)
     timeline_x_ax.set_ylabel("Wellhead Angle")
@@ -160,11 +169,11 @@ def create_plots():
     """ Insert photo """
     im = plt.imread('logo/Birdview-Logo-LowRess-RGB-(Digital).png')
     newax = fig.add_axes([0.455, 0.9, 0.1, 0.1], anchor='NE', zorder=-1)
-    newax.imshow(im)
+    #newax.imshow(im)
     newax.axis('off')
 
     """ Return figure, axes and lines """
-    return {
+    plots =  {
         "fig": fig,
         "axes": {
             "time_x": timeline_x_ax,
@@ -180,7 +189,123 @@ def create_plots():
         },
     }
 
+    return plots
+
+
+def update_wellhead_plot(x, y, s, line):
+    line.set_xdata([0, x])
+    line.set_ydata([0, y])
+
+    colors = [
+        [0, 1, 0, 1],
+        [0.8, 0.8, 0, 1],
+        [1, 0, 0, 1],
+    ]
+
+    line.set_color(colors[s])
+
+
+def update_history_plot(hx, hy, hs, ht, data):
+    data["lines"]["time_x"].set_ydata(hx)
+    data["lines"]["time_x"].set_xdata(ht)
+    data["lines"]["time_y"].set_ydata(hy)
+    data["lines"]["time_y"].set_xdata(ht)
+    data["lines"]["time_s"].set_ydata(hs)
+    data["lines"]["time_s"].set_xdata(ht)
+
+    data["axes"]["time_x"].set_xlim([ht[-1] - SECONDS_TO_SHOW, ht[-1]])
+
+
+def get_wellhead_status(pos, poly=None):
+    if poly:
+        if poly.contains_point(pos):
+            return 0
+        else:
+            return 2
+
+    distance_to_center = pos[0] * pos[0] + pos[1] * pos[1]
+    if distance_to_center >= 4:
+        return 2
+    else:
+        return 0
+
+
+def main():
+    try:
+        data = create_plots()
+        port = functions.get_port("GCS-UAV:", 1)
+        wellhead = wh.Wellhead(port, 19200)
+
+        """ Activate figure window """
+        plt.ion()
+        plt.show()
+
+        """ Time keeping"""
+        t_start = time.time()
+        t_now = time.time() - t_start
+
+
+        """ Objects for history plotting"""
+        history_x = []
+        history_y = []
+        history_s = []
+        history_t = []
+
+        """ Get first position for calibration """
+        first_position = wellhead.get_positions(t_now)
+
+        """ Create log and write first lines """
+        if DEBUG_MODE:
+            log_name = "logs/DEBUG_LOG.csv"
+        else:
+            log_name = "logs/log_" + datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S") + ".csv"
+
+        with open(log_name, "w+") as file:
+            file.write("t,X,Y,status\n")
+            status = get_wellhead_status(first_position, poly=data["lines"]["poly"])
+            file.write("{:0.2f},{:0.3f},{:0.3f},{:d}\n".format(-1, *first_position, status))
+
+        """ Main loop """
+        while True:
+            if plt.fignum_exists(data["fig"].number):
+                pass
+            else:
+                exit(9)
+
+            """ Update every 5 seconds """
+            t_now = time.time() - t_start
+            if int(t_now) % 5 == 0:
+                positions = wellhead.get_positions(t_now)
+                positions = tuple([positions[i] - first_position[i] for i in range(len(positions))])
+                plt.pause(1)
+                print(positions)
+            else:
+                plt.pause(0.1)
+                continue
+
+            """ Update histories """
+            history_x.append(positions[0])
+            history_y.append(positions[1])
+            history_s.append(get_wellhead_status(positions, data["lines"]["poly"]))
+            history_t.append(t_now)
+
+            while history_t[0] < history_t[-1] - SECONDS_TO_SHOW - 5:
+                history_t.pop(0)
+                history_x.pop(0)
+                history_s.pop(0)
+                history_y.pop(0)
+
+            """ Write to log """
+            with open(log_name, "a+") as file:
+                file.write("{:0.2f},{:0.3f},{:0.3f},{:d}\n".format(t_now, *positions, status))
+
+            """ Update plots """
+            update_wellhead_plot(history_x[-1], history_y[-1], history_s[-1], data["lines"]["wellhead"])
+            update_history_plot(history_x, history_y, history_s, history_t, data)
+            data["fig"].canvas.flush_events()
+
+    except:
+        raise
 
 if __name__ == '__main__':
-    create_plots()
-    plt.show()
+    main()
