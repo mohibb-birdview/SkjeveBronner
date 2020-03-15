@@ -30,6 +30,7 @@ class WaveSignal:
 
         return x, y
 
+
 def main():
     print("Creating modbus server")
     port = functions.get_port("Modbus Server Port")
@@ -49,7 +50,6 @@ def main():
     slave1.add_block("c", cst.COILS, 0, n)
     slave1.add_block("d", cst.DISCRETE_INPUTS, 0, n)
     slave1.add_block("b", cst.HOLDING_REGISTERS, 0, n)
-
 
     print("Running Server\n")
     time.sleep(1)
