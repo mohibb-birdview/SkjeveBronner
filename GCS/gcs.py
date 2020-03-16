@@ -12,12 +12,15 @@ import matplotlib
 import matplotlib.path as mplpath
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from Functions import functions
 from GCS import wellhead_sim as wh
 
 
 DEBUG_MODE = True
+OLD_LOG = True
+OLD_LOG_NAME = "logs/Animation_log.csv"
 
 SECONDS_TO_SHOW = 30
 MAX_ANGLE = 3
@@ -115,6 +118,7 @@ def create_plots():
     pos_ax.set_ylim([-lim, lim])
     pos_ax.get_xaxis().set_visible(False)
     pos_ax.get_yaxis().set_visible(False)
+    plt.gca().invert_xaxis()
 
     """ Create center cross """
     line_length = MAX_ANGLE + 0.2
@@ -122,6 +126,8 @@ def create_plots():
     pos_ax.plot([-line_length, line_length], [0, 0], "k", linewidth=0.5)
 
     """ Create Circles and annotation """
+    pos_ax.annotate("+X", xy=(MAX_ANGLE+0.5, 0.1))
+    pos_ax.annotate("+Z", xy=(-0.1, MAX_ANGLE+0.3))
     t = np.linspace(0, 2 * np.pi, 51)
     for d in np.arange(0, MAX_ANGLE+0.1, 0.5):
         x = d * np.sin(t)
@@ -129,8 +135,8 @@ def create_plots():
         pos_ax.plot(x, y, "k:", linewidth=0.5)
 
         if d != int(d):
-            pos_ax.annotate("{:0.1f}°".format(d + 0.5), xy=(0.1, d + 0.45))
-            pos_ax.annotate("{:0.1f}°".format(d + 0.5), xy=(0.1, -d - 0.55))
+            pos_ax.annotate("{:0.1f}°".format(d + 0.5), xy=(-0.1, d + 0.45))
+            pos_ax.annotate("{:0.1f}°".format(-d - 0.5), xy=(-0.1, -d - 0.55))
 
     """ Define polygon """
     poly1 = [
@@ -169,7 +175,7 @@ def create_plots():
     """ Insert photo """
     im = plt.imread('logo/Birdview-Logo-LowRess-RGB-(Digital).png')
     newax = fig.add_axes([0.455, 0.9, 0.1, 0.1], anchor='NE', zorder=-1)
-    #newax.imshow(im)
+    newax.imshow(im)
     newax.axis('off')
 
     """ Return figure, axes and lines """
@@ -214,6 +220,12 @@ def update_history_plot(hx, hy, hs, ht, data):
     data["lines"]["time_s"].set_xdata(ht)
 
     data["axes"]["time_x"].set_xlim([ht[-1] - SECONDS_TO_SHOW, ht[-1]])
+
+    x = hx[-1]
+    y = hy[-1]
+    total_angle = np.sqrt(x*x + y*y)
+    s = "X:{:+4.3f}°  Z:{:+4.3f}°  3D:{:4.3f}°".format(x, y, total_angle)
+    data["axes"]["time_x"].set_title(s)
 
 
 def get_wellhead_status(pos, poly=None):
@@ -265,23 +277,46 @@ def main():
             status = get_wellhead_status(first_position, poly=data["lines"]["poly"])
             file.write("{:0.2f},{:0.3f},{:0.3f},{:d}\n".format(-1, *first_position, status))
 
+        if OLD_LOG:
+            df = pd.read_csv(OLD_LOG_NAME, header=1)
+            df_i = 0
+        else:
+            df = None
+            df_i = None
+
         """ Main loop """
         while True:
+            t_now = time.time() - t_start
+
             if plt.fignum_exists(data["fig"].number):
                 pass
             else:
                 exit(9)
 
-            """ Update every 5 seconds """
-            t_now = time.time() - t_start
-            if int(t_now) % 5 == 0:
-                positions = wellhead.get_positions(t_now)
-                positions = tuple([positions[i] - first_position[i] for i in range(len(positions))])
-                plt.pause(1)
-                print(positions)
+            if OLD_LOG:
+                try:
+                    if abs(t_now - df.loc[df_i]["t"]) < 0.1:
+                        x = df.loc[df_i]["X"]
+                        y = df.loc[df_i]["Y"]
+
+                        positions = (x, y)
+                        df_i += 1
+                    else:
+                        plt.pause(0.1)
+                        continue
+                except KeyError:
+                    pass
+
             else:
-                plt.pause(0.1)
-                continue
+                """ Update every 5 seconds """
+                if int(t_now) % 5 == 0:
+                    positions = wellhead.get_positions(t_now)
+                    positions = tuple([positions[i] - first_position[i] for i in range(len(positions))])
+                    plt.pause(1)
+                    print(positions)
+                else:
+                    plt.pause(0.1)
+                    continue
 
             """ Update histories """
             history_x.append(positions[0])
@@ -289,7 +324,7 @@ def main():
             history_s.append(get_wellhead_status(positions, data["lines"]["poly"]))
             history_t.append(t_now)
 
-            while history_t[0] < history_t[-1] - SECONDS_TO_SHOW - 5:
+            while history_t[0] < history_t[-1] - SECONDS_TO_SHOW - 10:
                 history_t.pop(0)
                 history_x.pop(0)
                 history_s.pop(0)
@@ -302,6 +337,8 @@ def main():
             """ Update plots """
             update_wellhead_plot(history_x[-1], history_y[-1], history_s[-1], data["lines"]["wellhead"])
             update_history_plot(history_x, history_y, history_s, history_t, data)
+
+
             data["fig"].canvas.flush_events()
 
     except:
@@ -309,3 +346,12 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    data = create_plots()
+
+    update_wellhead_plot(1, 1, 0, data["lines"]["wellhead"])
+    update_history_plot([0,1], [0,1], [0,0], [0,1], data)
+
+    data["fig"].canvas.flush_events()
+    while True:
+        plt.pause(0.1)
